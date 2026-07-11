@@ -132,7 +132,7 @@ class ContextChanger(Extension):
 class CacheData(BaseModel):
     config: Config
     deps: dict[str, str]
-    files: dict[str, bytes]
+    files: dict[str, str]
     build_files: list[str]
 
 
@@ -238,8 +238,10 @@ class Bundler:
         if not self.metafile_path.exists():
             return uuid.uuid4().hex
         meta = Metafile.model_validate_json(self.metafile_path.read_text())
-        files: dict[str, bytes] = {
-            str(file): file.read_bytes() if file.exists() else uuid.uuid4().hex.encode()
+        files: dict[str, str] = {
+            str(file): base64.b64encode(file.read_bytes()).decode()
+            if file.exists()
+            else uuid.uuid4().hex
             for file in [self.path_to_abspath(file) for file in meta.inputs.keys()]
         }
         return hashlib.blake2b(
