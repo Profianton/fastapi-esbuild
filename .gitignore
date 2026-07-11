@@ -1,0 +1,6 @@
+/.venv
+/.ruff_cache
+/.mypy_cache
+/dist
+__pycache__/
+*.pyc

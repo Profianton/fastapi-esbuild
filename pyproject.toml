@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fastapi-esbuild"
+version = "0.1.0"
+description = "FastAPI helper for bundling frontend assets with esbuild."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "async-lru>=2.3.0",
+    "fastapi[all]>=0.128.4",
+    "httpx[http2]",
+    "jinja2",
+    "packaging",
+    "platformdirs>=4.10.0",
+    "pydantic>=2.7.0,<3.0.0",
+    "semantic-version",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fastapi_esbuild"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/README.md",
+    "/pyproject.toml",
+]

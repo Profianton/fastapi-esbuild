@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>{{title}}</title>
+		{% render 'user_templates/header.html' with ctx %}
+	</head>
+	<body>
+		<div id="app"></div>
+		{% for file, media_type in files %} {% if media_type == 'text/css' %}
+		<link rel="stylesheet" href="{{file}}" />
+		{% else %}
+		<script src="{{file}}" type="module"></script>
+		{% endif %} {%endfor%}
+	</body>
+</html>
