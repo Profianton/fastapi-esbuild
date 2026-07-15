@@ -71,6 +71,17 @@ class CacheData(BaseModel):
     build_files: list[str]
 
 
+class PageGenerator:
+    def __init__(self, bundler: Bundler, request: Request, file: str):
+        self._bundler = bundler
+        self._request = request
+        self._file = file
+        self.title = file.split("/")[-1].split(".")[0]
+
+    async def __call__(self):
+        return await self._bundler.spa_response(self._request, self._file, self.title)
+
+
 class Bundler:
     def __init__(
         self,
@@ -328,6 +339,26 @@ class Bundler:
                 "ctx": self.user_template_ctx(request),
             },
         )
+
+    def page(self, file: str) -> Callable[..., PageGenerator]:
+        """This is the di style system to return a page
+
+        ## Example
+        ```python
+        @app.get("/")
+        async def index(page: Annotated[PageGenerator, Depends(bundler.page("index.tsx"))]):
+            page.title = "Startseite"
+            return await page()
+
+        ```
+        """
+
+        self.add_build_file(file)
+
+        def _page(request: Request):
+            return PageGenerator(self, request, file)
+
+        return _page
 
     def reload(self):
         self.build.cache_clear()
