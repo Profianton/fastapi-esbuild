@@ -1,3 +1,3 @@
-from .bundler import Bundler, Config
+from .bundler import Bundler, Config, PageGenerator
 
-__all__ = ["Bundler", "Config"]
+__all__ = ["Bundler", "Config", "PageGenerator"]
