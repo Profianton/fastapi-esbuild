@@ -35,8 +35,8 @@ import shutil
 
 
 class Config(BaseModel):
-    minify: bool
-    sourcemap: bool
+    minify: bool = True
+    sourcemap: bool = False
     build_on_startup: bool = False
     loaders: dict[str, str] = Field(
         default_factory=lambda: {
