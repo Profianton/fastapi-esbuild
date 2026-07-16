@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import json
+import os
 import mimetypes
 import pathlib
 import subprocess
@@ -155,7 +156,9 @@ class Bundler:
             if dist_dir is None
             else dist_dir
         )
-        self.tsconfig_path = pathlib.Path(tempfile.mkstemp(".json")[1])
+        fd, tsconfig_path = tempfile.mkstemp(".json")
+        os.close(fd)
+        self.tsconfig_path = pathlib.Path(tsconfig_path)
         self.build_files: list[str] = []
         self.build = alru_cache(maxsize=None)(self.__build_nocache)
 
