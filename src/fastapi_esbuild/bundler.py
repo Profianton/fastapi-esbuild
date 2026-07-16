@@ -38,18 +38,7 @@ class Config(BaseModel):
     minify: bool = True
     sourcemap: bool = False
     build_on_startup: bool = False
-    loaders: dict[str, str] = Field(
-        default_factory=lambda: {
-            ".png": "dataurl",
-            ".jpg": "dataurl",
-            ".jpeg": "dataurl",
-            ".svg": "dataurl",
-            ".gif": "dataurl",
-            ".webp": "dataurl",
-            ".mp3": "dataurl",
-            ".module.css": "local-css",
-        }
-    )
+    loader_overwrites: dict[str, str] = Field(default_factory=dict)
     target: list[str] = Field(
         default_factory=lambda: [
             "chrome111",
@@ -69,6 +58,7 @@ class CacheData(BaseModel):
     deps: dict[str, str]
     files: dict[str, str]
     build_files: list[str]
+    url_for: bool
 
 
 class PageGenerator:
@@ -80,6 +70,17 @@ class PageGenerator:
 
     async def __call__(self):
         return await self._bundler.spa_response(self._request, self._file, self.title)
+
+
+def generate_public_path_placeholder():
+    return f"/__fastapi-esbuild-{uuid.uuid4().hex}/"
+
+
+class BuildResult(BaseModel):
+    meta: Metafile
+    out_path_map: dict[str, str]
+    out_files: dict[str, tuple[bytes, str, list[str]]]
+    public_path: str
 
 
 class Bundler:
@@ -157,11 +158,11 @@ class Bundler:
     def metafile_path(self):
         return self.dist_dir / "meta.json"
 
-    def path_to_abspath(self, path: str):
+    def frontend_path_to_abspath(self, path: str):
         return (self.frontend_dir / path).resolve()
 
     def normalize_dist_path(self, path: str):
-        return str(self.path_to_abspath(path).relative_to(self.dist_dir))
+        return str(self.frontend_path_to_abspath(path).relative_to(self.dist_dir))
 
     def gen_out_path_map(self, meta: Metafile):
         out_path_map: dict[str, str] = {}
@@ -180,6 +181,14 @@ class Bundler:
     def cache_key_file(self):
         return self.dist_dir / "cache_key.txt"
 
+    @property
+    def public_path_file(self):
+        return self.dist_dir / "public_path.txt"
+
+    @property
+    async def public_path(self):
+        return (await self.build()).public_path
+
     def compute_cache_key(self):
         if not self.metafile_path.exists():
             return uuid.uuid4().hex
@@ -188,7 +197,9 @@ class Bundler:
             str(file): base64.b64encode(file.read_bytes()).decode()
             if file.exists()
             else uuid.uuid4().hex
-            for file in [self.path_to_abspath(file) for file in meta.inputs.keys()]
+            for file in [
+                self.frontend_path_to_abspath(file) for file in meta.inputs.keys()
+            ]
         }
         return hashlib.blake2b(
             CacheData(
@@ -196,6 +207,7 @@ class Bundler:
                 deps=self.deps(),
                 files=files,
                 build_files=self.build_files,
+                url_for=self.url_for is not None,
             )
             .model_dump_json()
             .encode()
@@ -203,7 +215,7 @@ class Bundler:
 
     async def __build_nocache(
         self,
-    ) -> tuple[Metafile, dict[str, str], dict[str, tuple[bytes, str, list[str]]]]:
+    ) -> BuildResult:
         """use the cached function (build)"""
         self.dist_dir.mkdir(parents=True, exist_ok=True)
         self.cached = False
@@ -232,6 +244,8 @@ class Bundler:
                     }
                 )
             )
+            asset_loader = "dataurl" if self.url_for is None else "file"
+            public_path = generate_public_path_placeholder()
             build_args = (
                 [str(self.frontend_dir / file) for file in self.build_files]
                 + [
@@ -243,11 +257,22 @@ class Bundler:
                     f"--metafile={self.metafile_path}",
                     "--format=esm",
                     f"--tsconfig={self.tsconfig_path}",
+                    f"--public-path={public_path}",
                 ]
                 + [f"--target={','.join(self.config.target)}"]
                 + [
                     f"--loader:{ext}={loader_type}"
-                    for ext, loader_type in self.config.loaders.items()
+                    for ext, loader_type in {
+                        ".png": asset_loader,
+                        ".jpg": asset_loader,
+                        ".jpeg": asset_loader,
+                        ".svg": asset_loader,
+                        ".gif": asset_loader,
+                        ".webp": asset_loader,
+                        ".mp3": asset_loader,
+                        ".module.css": "local-css",
+                        **self.config.loader_overwrites,
+                    }.items()
                 ]
             )
             try:
@@ -258,6 +283,10 @@ class Bundler:
                     f"{' '.join([str(arg) for arg in [self.launcher.bin_path, *build_args]])}"
                 )
                 raise
+            self.public_path_file.write_text(public_path)
+        else:
+            public_path = self.public_path_file.read_text()
+
         meta = Metafile.model_validate_json(self.metafile_path.read_text())
 
         out_files: dict[str, tuple[bytes, str, list[str]]] = {}
@@ -277,16 +306,17 @@ class Bundler:
         if not self.cached:
             self.cache_key_file.write_text(self.compute_cache_key())
 
-        return meta, self.gen_out_path_map(meta), out_files
-
-    async def out_path_map(self):
-        _, out_path_map, _ = await self.build()
-        return out_path_map
+        return BuildResult(
+            meta=meta,
+            out_path_map=self.gen_out_path_map(meta),
+            out_files=out_files,
+            public_path=public_path,
+        )
 
     async def url_from_built_file(self, file: str):
         if self.url_for is None:
             # Generate data url
-            _, _, out_files = await self.build()
+            out_files = (await self.build()).out_files
             if file not in out_files:
                 raise ValueError(f"file {file} not found")
             content, media_type, _ = out_files[file]
@@ -295,14 +325,19 @@ class Bundler:
         return self.url_for(self.get_file, path=file)
 
     async def path_for_js(self, file: str):
-        return await self.url_from_built_file((await self.out_path_map())[file])
+        return await self.url_from_built_file((await self.build()).out_path_map[file])
 
     async def get_file(self, path: str):
-        _, _, out_files = await self.build()
+        out_files = (await self.build()).out_files
         if path not in out_files:
             raise HTTPException(status_code=404)
 
         content, media_type, _ = out_files[path]
+        if self.url_for is not None:
+            content = content.replace(
+                (await self.public_path).encode(),
+                self.url_for(self.get_file, path="").encode(),
+            )
 
         return Response(
             content,
@@ -311,7 +346,8 @@ class Bundler:
         )
 
     async def build_header(self, path: str):
-        _, out_path_map, out_files = await self.build()
+        out_path_map = (await self.build()).out_path_map
+        out_files = (await self.build()).out_files
         files: set[str] = set()
         files_todo: set[str] = {out_path_map[path]}
         while len(files_todo) > 0:
