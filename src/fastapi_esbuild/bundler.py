@@ -38,18 +38,7 @@ class Config(BaseModel):
     minify: bool = True
     sourcemap: bool = False
     build_on_startup: bool = False
-    loaders: dict[str, str] = Field(
-        default_factory=lambda: {
-            ".png": "dataurl",
-            ".jpg": "dataurl",
-            ".jpeg": "dataurl",
-            ".svg": "dataurl",
-            ".gif": "dataurl",
-            ".webp": "dataurl",
-            ".mp3": "dataurl",
-            ".module.css": "local-css",
-        }
-    )
+    loader_overwrites: dict[str, str] = Field(default_factory=dict)
     target: list[str] = Field(
         default_factory=lambda: [
             "chrome111",
@@ -80,6 +69,9 @@ class PageGenerator:
 
     async def __call__(self):
         return await self._bundler.spa_response(self._request, self._file, self.title)
+
+
+PUBLIC_PATH = "/__fastapi-esbuild-public-path-placeholder__/"
 
 
 class Bundler:
@@ -157,11 +149,11 @@ class Bundler:
     def metafile_path(self):
         return self.dist_dir / "meta.json"
 
-    def path_to_abspath(self, path: str):
+    def frontend_path_to_abspath(self, path: str):
         return (self.frontend_dir / path).resolve()
 
     def normalize_dist_path(self, path: str):
-        return str(self.path_to_abspath(path).relative_to(self.dist_dir))
+        return str(self.frontend_path_to_abspath(path).relative_to(self.dist_dir))
 
     def gen_out_path_map(self, meta: Metafile):
         out_path_map: dict[str, str] = {}
@@ -188,7 +180,9 @@ class Bundler:
             str(file): base64.b64encode(file.read_bytes()).decode()
             if file.exists()
             else uuid.uuid4().hex
-            for file in [self.path_to_abspath(file) for file in meta.inputs.keys()]
+            for file in [
+                self.frontend_path_to_abspath(file) for file in meta.inputs.keys()
+            ]
         }
         return hashlib.blake2b(
             CacheData(
@@ -232,6 +226,7 @@ class Bundler:
                     }
                 )
             )
+            asset_loader = "dataurl" if self.url_for is None else "file"
             build_args = (
                 [str(self.frontend_dir / file) for file in self.build_files]
                 + [
@@ -243,11 +238,22 @@ class Bundler:
                     f"--metafile={self.metafile_path}",
                     "--format=esm",
                     f"--tsconfig={self.tsconfig_path}",
+                    f"--public-path={PUBLIC_PATH}",
                 ]
                 + [f"--target={','.join(self.config.target)}"]
                 + [
                     f"--loader:{ext}={loader_type}"
-                    for ext, loader_type in self.config.loaders.items()
+                    for ext, loader_type in {
+                        ".png": asset_loader,
+                        ".jpg": asset_loader,
+                        ".jpeg": asset_loader,
+                        ".svg": asset_loader,
+                        ".gif": asset_loader,
+                        ".webp": asset_loader,
+                        ".mp3": asset_loader,
+                        ".module.css": "local-css",
+                        **self.config.loader_overwrites,
+                    }.items()
                 ]
             )
             try:
@@ -303,6 +309,10 @@ class Bundler:
             raise HTTPException(status_code=404)
 
         content, media_type, _ = out_files[path]
+        if self.url_for is not None:
+            content = content.replace(
+                PUBLIC_PATH.encode(), self.url_for(self.get_file, path="").encode()
+            )
 
         return Response(
             content,
