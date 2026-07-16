@@ -14,3 +14,12 @@ from fastapi_esbuild import Bundler, Config
 Create a `Bundler`, register `bundler.get_file` on an asset route, add entry
 files with `bundler.add_build_file(...)`, and call `bundler.spa_response(...)`
 from your FastAPI views.
+
+## Example
+
+The example is located in `examples/minimal_app`.
+run it using
+
+```bash
+uvicorn examples.minimal_app.main:app --reload --reload-include *.tsx
+```
