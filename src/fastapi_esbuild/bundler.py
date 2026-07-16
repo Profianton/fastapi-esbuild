@@ -128,13 +128,18 @@ class Bundler:
             )
         )
 
-        self.deps = cache(
-            (lambda: deps)
-            if deps is not None
-            else lambda: json.loads((frontend_dir / "package.json").read_text())[
-                "dependencies"
-            ]
-        )
+        @cache
+        def _deps():
+            if deps is not None:
+                return deps
+            package_json_path = frontend_dir / "package.json"
+            if not package_json_path.exists():
+                return {}
+            package_json_content = json.loads(package_json_path.read_text())
+            assert isinstance(package_json_content, dict)
+            return package_json_content.get("dependencies", {})
+
+        self.deps = _deps
         self.frontend_dir = frontend_dir
         self.esbuild_version = esbuild_version
         self.url_for = url_for
