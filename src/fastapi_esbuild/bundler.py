@@ -58,6 +58,7 @@ class CacheData(BaseModel):
     deps: dict[str, str]
     files: dict[str, str]
     build_files: list[str]
+    url_for: bool
 
 
 class PageGenerator:
@@ -206,6 +207,7 @@ class Bundler:
                 deps=self.deps(),
                 files=files,
                 build_files=self.build_files,
+                url_for=self.url_for is not None,
             )
             .model_dump_json()
             .encode()
