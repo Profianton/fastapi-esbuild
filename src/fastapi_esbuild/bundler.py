@@ -84,10 +84,9 @@ class BuildResult(BaseModel):
     public_path: str
 
 
-class TemplateAsset:
-    def __init__(self, template: str, context: dict):
-        self.template = template
-        self.context = context
+class TemplateAsset(BaseModel):
+    template: str
+    context: dict[str, Any]
 
 
 class Bundler:
@@ -359,7 +358,7 @@ class Bundler:
             headers={"cache-control": "max-age=31536000"},
         )
 
-    async def build_header(self, path: str):
+    async def build_header(self, path: str) -> list[TemplateAsset]:
         out_path_map = (await self.build()).out_path_map
         out_files = (await self.build()).out_files
         files: set[str] = set()
@@ -373,9 +372,13 @@ class Bundler:
         for file in files:
             url = await self.url_from_built_file(file)
             if out_files[file][1] == "text/css":
-                assets.append(TemplateAsset("assets/css.html", {"file": url}))
+                assets.append(
+                    TemplateAsset(template="assets/css.html", context={"file": url})
+                )
             else:
-                assets.append(TemplateAsset("assets/module.html", {"file": url}))
+                assets.append(
+                    TemplateAsset(template="assets/module.html", context={"file": url})
+                )
         return assets
 
     def add_build_file(self, file: str):
