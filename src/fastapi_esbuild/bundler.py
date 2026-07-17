@@ -40,6 +40,7 @@ class Config(BaseModel):
     sourcemap: bool = False
     build_on_startup: bool = False
     loader_overwrites: dict[str, str] = Field(default_factory=dict)
+    asset_overwrites: dict[str, str] = Field(default_factory=dict)
     target: list[str] = Field(
         default_factory=lambda: [
             "chrome111",
@@ -373,11 +374,17 @@ class Bundler:
             url = await self.url_from_built_file(file)
             if out_files[file][1] == "text/css":
                 assets.append(
-                    TemplateAsset(template="assets/css.html", context={"file": url})
+                    TemplateAsset(
+                        template=self.config.asset_overwrites.get("assets/css.html", "assets/css.html"),
+                        context={"file": url},
+                    )
                 )
             else:
                 assets.append(
-                    TemplateAsset(template="assets/module.html", context={"file": url})
+                    TemplateAsset(
+                        template=self.config.asset_overwrites.get("assets/module.html", "assets/module.html"),
+                        context={"file": url},
+                    )
                 )
         return assets
 
