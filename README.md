@@ -2,24 +2,38 @@
 
 FastAPI helper for bundling frontend assets with esbuild.
 
-This package is currently extracted from the FastAPI template and is intended
-to be consumed as a local reusable package while the API settles.
-
-## Usage
+## Basic usage
 
 ```python
+from pathlib import Path
+from typing import Annotated
+
+from fastapi import Depends, FastAPI
 from fastapi_esbuild import Bundler, Config
+from fastapi_esbuild.bundler import PageGenerator
+
+app = FastAPI()
+
+bundler = Bundler(
+    config=Config(),
+    frontend_dir=Path('frontend'),
+)
+
+app.get('/assets/{path:path}')(bundler.get_file)
+
+@app.get('/')
+async def index(
+    page: Annotated[PageGenerator, Depends(bundler.page('index.tsx'))],
+):
+    page.title = 'Home'
+    return await page()
 ```
 
-Create a `Bundler`, register `bundler.get_file` on an asset route, add entry
-files with `bundler.add_build_file(...)`, and call `bundler.spa_response(...)`
-from your FastAPI views.
+## Example app
 
-## Example
-
-The example is located in `examples/minimal_app`.
-run it using
+See `examples/minimal_app` for a complete working example.
+Run it with:
 
 ```bash
-uvicorn examples.minimal_app.main:app --reload --reload-include *.tsx
+uvicorn examples.minimal_app.main:app --reload --reload-include '*.tsx'
 ```
