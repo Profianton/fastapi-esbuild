@@ -84,6 +84,12 @@ class BuildResult(BaseModel):
     public_path: str
 
 
+class TemplateAsset:
+    def __init__(self, template: str, context: dict):
+        self.template = template
+        self.context = context
+
+
 class Bundler:
     def __init__(
         self,
@@ -363,9 +369,14 @@ class Bundler:
             files.add(file)
             for dep in out_files[file][2]:
                 files_todo.add(dep)
-        return [
-            (await self.url_from_built_file(file), out_files[file][1]) for file in files
-        ]
+        assets = []
+        for file in files:
+            url = await self.url_from_built_file(file)
+            if out_files[file][1] == "text/css":
+                assets.append(TemplateAsset("assets/css.html", {"file": url}))
+            else:
+                assets.append(TemplateAsset("assets/module.html", {"file": url}))
+        return assets
 
     def add_build_file(self, file: str):
         self.build_files.append(file)
