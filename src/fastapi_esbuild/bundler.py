@@ -41,7 +41,7 @@ class Config(BaseModel):
     sourcemap: bool = False
     build_on_startup: bool = False
     loader_overwrites: dict[str, str] = Field(default_factory=dict)
-    asset_overwrites: dict[
+    asset_template_overrides: dict[
         str | Annotated[None, Doc("the default/fallback template")], str
     ] = Field(default_factory=dict)
     target: list[str] = Field(
@@ -376,7 +376,7 @@ class Bundler:
             "text/css": "assets/css.html",
             None: "assets/module.html",
         }
-        asset_handlers.update(self.config.asset_overwrites)
+        asset_handlers.update(self.config.asset_template_overrides)
 
         assets = [
             TemplateAsset(
