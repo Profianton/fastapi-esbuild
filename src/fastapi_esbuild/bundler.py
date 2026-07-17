@@ -7,6 +7,7 @@ import pathlib
 import subprocess
 import uuid
 
+from annotated_doc import Doc
 from fastapi.templating import Jinja2Templates
 from jinja2 import (
     BaseLoader,
@@ -25,7 +26,7 @@ from .deps import download as download_deps
 from . import esbuild
 from fastapi import HTTPException, Request, Response
 
-from typing import Any, Callable
+from typing import Annotated, Any, Callable
 from pydantic import BaseModel, Field
 
 from functools import cache
@@ -40,7 +41,9 @@ class Config(BaseModel):
     sourcemap: bool = False
     build_on_startup: bool = False
     loader_overwrites: dict[str, str] = Field(default_factory=dict)
-    asset_overwrites: dict[str, str] = Field(default_factory=dict)
+    asset_overwrites: dict[
+        str | Annotated[None, Doc("the default/fallback template")], str
+    ] = Field(default_factory=dict)
     target: list[str] = Field(
         default_factory=lambda: [
             "chrome111",
@@ -369,23 +372,24 @@ class Bundler:
             files.add(file)
             for dep in out_files[file][2]:
                 files_todo.add(dep)
-        assets = []
-        for file in files:
-            url = await self.url_from_built_file(file)
-            if out_files[file][1] == "text/css":
-                assets.append(
-                    TemplateAsset(
-                        template=self.config.asset_overwrites.get("assets/css.html", "assets/css.html"),
-                        context={"file": url},
-                    )
-                )
-            else:
-                assets.append(
-                    TemplateAsset(
-                        template=self.config.asset_overwrites.get("assets/module.html", "assets/module.html"),
-                        context={"file": url},
-                    )
-                )
+        asset_handlers: dict[str | None, str] = {
+            "text/css": "assets/css.html",
+            None: "assets/module.html",
+        }
+        asset_handlers.update(self.config.asset_overwrites)
+
+        assets = [
+            TemplateAsset(
+                template=asset_handlers.get(out_files[file][1], asset_handlers[None]),
+                context={
+                    "url": await self.url_from_built_file(file),
+                    "bundler": self,
+                    "mime": out_files[file][1],
+                },
+            )
+            for file in files
+        ]
+
         return assets
 
     def add_build_file(self, file: str):
