@@ -8,10 +8,8 @@
 	</head>
 	<body>
 		<div id="app"></div>
-		{% for file, media_type in files %} {% if media_type == 'text/css' %}
-		<link rel="stylesheet" href="{{file}}" />
-		{% else %}
-		<script src="{{file}}" type="module"></script>
-		{% endif %} {%endfor%}
+		{% for asset in files %}
+		{% render asset.template with asset.context %}
+		{% endfor %}
 	</body>
 </html>
