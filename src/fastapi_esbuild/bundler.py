@@ -1,33 +1,34 @@
+from __future__ import annotations
+
 import base64
 import hashlib
 import json
 import os
-import mimetypes
 import pathlib
 import subprocess
-import uuid
 
-from annotated_doc import Doc
-from fastapi.templating import Jinja2Templates
-from jinja2 import (
-    BaseLoader,
-    ChoiceLoader,
-    Environment,
-    FileSystemLoader,
-    PrefixLoader,
+from jinja2 import BaseLoader
+
+from .build import (
+    asset_loader_for_url_mode,
+    create_build_args,
+    generate_public_path_placeholder,
+    output_files_from_meta,
 )
-
-from .jinja2_ContextChanger_extention import ContextChanger
+from .cache import compute_cache_key as calculate_cache_key
+from .cache_dir import cache_dir
+from .config import Config
+from .deps import download as download_deps
+from .models import BuildResult, CacheData, TemplateAsset
+from .page import PageGenerator
+from .templates import create_templates, normalize_template_context
 
 from .metafile import Metafile
-from .cache_dir import cache_dir
-from .deps import download as download_deps
 
 from . import esbuild
 from fastapi import HTTPException, Request, Response
 
-from typing import Annotated, Any, Callable
-from pydantic import BaseModel, Field
+from typing import Any, Callable
 
 from functools import cache
 from async_lru import alru_cache
@@ -36,61 +37,14 @@ import tempfile
 import shutil
 
 
-class Config(BaseModel):
-    minify: bool = True
-    sourcemap: bool = False
-    build_on_startup: bool = False
-    loader_overwrites: dict[str, str] = Field(default_factory=dict)
-    asset_template_overrides: dict[
-        str | Annotated[None, Doc("the default/fallback template")], str
-    ] = Field(default_factory=dict)
-    target: list[str] = Field(
-        default_factory=lambda: [
-            "chrome111",
-            "firefox114",
-            "safari16.4",
-            "edge111",
-        ]
-    )
-    cache: bool = False
-
-
-TEMPLATES_DIR = pathlib.Path(__file__).parent / "templates"
-
-
-class CacheData(BaseModel):
-    config: Config
-    deps: dict[str, str]
-    files: dict[str, str]
-    build_files: list[str]
-    url_for: bool
-
-
-class PageGenerator:
-    def __init__(self, bundler: Bundler, request: Request, file: str):
-        self._bundler = bundler
-        self._request = request
-        self._file = file
-        self.title = file.split("/")[-1].split(".")[0]
-
-    async def __call__(self):
-        return await self._bundler.spa_response(self._request, self._file, self.title)
-
-
-def generate_public_path_placeholder():
-    return f"/__fastapi-esbuild-{uuid.uuid4().hex}/"
-
-
-class BuildResult(BaseModel):
-    meta: Metafile
-    out_path_map: dict[str, str]
-    out_files: dict[str, tuple[bytes, str, list[str]]]
-    public_path: str
-
-
-class TemplateAsset(BaseModel):
-    template: str
-    context: dict[str, Any]
+__all__ = [
+    "Bundler",
+    "Config",
+    "PageGenerator",
+    "BuildResult",
+    "CacheData",
+    "TemplateAsset",
+]
 
 
 class Bundler:
@@ -107,36 +61,8 @@ class Bundler:
         esbuild_version: str = "0.28.1",
         url_for: Callable[..., str] | None = None,
     ):
-        self.user_template_ctx = (
-            user_template_ctx
-            if callable(user_template_ctx)
-            else (lambda _: user_template_ctx if user_template_ctx is not None else {})
-        )
-        self.templates = Jinja2Templates(
-            env=Environment(
-                extensions=[ContextChanger],
-                loader=ChoiceLoader(
-                    [
-                        *(
-                            [
-                                PrefixLoader(
-                                    {
-                                        "user_templates": (
-                                            FileSystemLoader(user_templates)
-                                            if isinstance(user_templates, pathlib.Path)
-                                            else user_templates
-                                        )
-                                    }
-                                )
-                            ]
-                            if user_templates is not None
-                            else []
-                        ),
-                        FileSystemLoader(TEMPLATES_DIR),
-                    ]
-                ),
-            )
-        )
+        self.user_template_ctx = normalize_template_context(user_template_ctx)
+        self.templates = create_templates(user_templates)
 
         @cache
         def _deps():
@@ -207,28 +133,14 @@ class Bundler:
         return (await self.build()).public_path
 
     def compute_cache_key(self):
-        if not self.metafile_path.exists():
-            return uuid.uuid4().hex
-        meta = Metafile.model_validate_json(self.metafile_path.read_text())
-        files: dict[str, str] = {
-            str(file): base64.b64encode(file.read_bytes()).decode()
-            if file.exists()
-            else uuid.uuid4().hex
-            for file in [
-                self.frontend_path_to_abspath(file) for file in meta.inputs.keys()
-            ]
-        }
-        return hashlib.blake2b(
-            CacheData(
-                config=self.config,
-                deps=self.deps(),
-                files=files,
-                build_files=self.build_files,
-                url_for=self.url_for is not None,
-            )
-            .model_dump_json()
-            .encode()
-        ).hexdigest()
+        return calculate_cache_key(
+            metafile_path=self.metafile_path,
+            frontend_path_to_abspath=self.frontend_path_to_abspath,
+            config=self.config,
+            deps=self.deps(),
+            build_files=self.build_files,
+            url_for_available=self.url_for is not None,
+        )
 
     async def __build_nocache(
         self,
@@ -261,36 +173,17 @@ class Bundler:
                     }
                 )
             )
-            asset_loader = "dataurl" if self.url_for is None else "file"
+            asset_loader = asset_loader_for_url_mode(self.url_for is not None)
             public_path = generate_public_path_placeholder()
-            build_args = (
-                [str(self.frontend_dir / file) for file in self.build_files]
-                + [
-                    "--bundle",
-                    f"--outdir={self.dist_dir}",
-                    *(["--minify"] if self.config.minify else []),
-                    *(["--sourcemap"] if self.config.sourcemap else []),
-                    "--entry-names=[name]-[hash]",
-                    f"--metafile={self.metafile_path}",
-                    "--format=esm",
-                    f"--tsconfig={self.tsconfig_path}",
-                    f"--public-path={public_path}",
-                ]
-                + [f"--target={','.join(self.config.target)}"]
-                + [
-                    f"--loader:{ext}={loader_type}"
-                    for ext, loader_type in {
-                        ".png": asset_loader,
-                        ".jpg": asset_loader,
-                        ".jpeg": asset_loader,
-                        ".svg": asset_loader,
-                        ".gif": asset_loader,
-                        ".webp": asset_loader,
-                        ".mp3": asset_loader,
-                        ".module.css": "local-css",
-                        **self.config.loader_overwrites,
-                    }.items()
-                ]
+            build_args = create_build_args(
+                frontend_dir=self.frontend_dir,
+                build_files=self.build_files,
+                dist_dir=self.dist_dir,
+                metafile_path=self.metafile_path,
+                tsconfig_path=self.tsconfig_path,
+                public_path=public_path,
+                config=self.config,
+                asset_loader=asset_loader,
             )
             try:
                 await self.launcher.run(build_args)
@@ -306,20 +199,9 @@ class Bundler:
 
         meta = Metafile.model_validate_json(self.metafile_path.read_text())
 
-        out_files: dict[str, tuple[bytes, str, list[str]]] = {}
-
-        for out_path, d in meta.outputs.items():
-            normalized_path = self.normalize_dist_path(out_path)
-
-            media_type, _ = mimetypes.guess_type(normalized_path)
-
-            out_files[normalized_path] = (
-                (self.dist_dir / normalized_path).read_bytes(),
-                media_type or "application/octet-stream",
-                [self.normalize_dist_path(d.cssBundle)]
-                if d.cssBundle is not None
-                else [],
-            )
+        out_files = output_files_from_meta(
+            meta, self.dist_dir, self.normalize_dist_path
+        )
         if not self.cached:
             self.cache_key_file.write_text(self.compute_cache_key())
 
